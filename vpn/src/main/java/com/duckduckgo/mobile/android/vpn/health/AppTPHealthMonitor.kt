@@ -17,9 +17,11 @@
 package com.duckduckgo.mobile.android.vpn.health
 
 import android.content.Context
+import android.os.Process
 import com.duckduckgo.app.utils.ConflatedJob
 import com.duckduckgo.di.scopes.VpnObjectGraph
 import com.duckduckgo.mobile.android.vpn.di.VpnCoroutineScope
+import com.duckduckgo.mobile.android.vpn.di.VpnScope
 import com.duckduckgo.mobile.android.vpn.health.AppTPHealthMonitor.HealthState.*
 import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.REMOVE_FROM_DEVICE_TO_NETWORK_QUEUE
 import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.SOCKET_CHANNEL_CONNECT_EXCEPTION
@@ -29,6 +31,7 @@ import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.TUN_READ
 import com.duckduckgo.mobile.android.vpn.service.VpnQueues
 import com.duckduckgo.mobile.android.vpn.service.VpnServiceCallbacks
 import com.duckduckgo.mobile.android.vpn.service.VpnStopReason
+import com.duckduckgo.mobile.android.vpn.state.VpnStateCollector
 import com.squareup.anvil.annotations.ContributesMultibinding
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -37,7 +40,7 @@ import timber.log.Timber
 import javax.inject.Inject
 import javax.inject.Singleton
 
-@Singleton
+@VpnScope
 @ContributesMultibinding(VpnObjectGraph::class)
 //        store raw metrics as they happen.
 //            - sample the health regularly (every 10s?)
@@ -54,7 +57,7 @@ class AppTPHealthMonitor @Inject constructor(
     private val applicationContext: Context,
     private val tracerPacketBuilder: TracerPacketBuilder,
     private val tracerPacketRegister: TracerPacketRegister,
-    // private val vpnStateCollector: VpnStateCollector,
+    private val vpnStateCollector: VpnStateCollector,
     private val vpnQueues: VpnQueues
 ) :
     VpnServiceCallbacks {
@@ -71,26 +74,27 @@ class AppTPHealthMonitor @Inject constructor(
     private var socketChannelReadExceptionAlertDuration = 0
     private var socketChannelWriteExceptionAlertDuration = 0
     private var socketChannelConnectExceptionAlertDuration = 0
+    private var tracerPacketAlertDuration = 0
 
     private val badHealthNotificationManager = HealthNotificationManager(applicationContext)
 
     private suspend fun checkCurrentHealth() {
 
-//        val vpnState = vpnStateCollector.collectVpnState(applicationContext.packageName)
-//        Timber.v("VPNSTATE:\n%s", vpnState.toString(4))
+        Timber.w("ApptP: PID: %d", Process.myPid())
+
+        val vpnState = vpnStateCollector.collectVpnState(applicationContext.packageName)
+        //Timber.v("VPNSTATE:\n%s", vpnState.toString(4))
 
         sampleTunReadQueueReadRate()
-
-        with(numberOpenTcpConnections()) {
-            sampleSocketReadExceptions(this)
-            sampleSocketWriteExceptions(this)
-            sampleSocketConnectExceptions(this)
-        }
+        sampleSocketExceptions()
+        sampleTracerPackets()
 
         /*
          * temporary hack; remove once development done
          */
         temporarySimulatedHealthCheck()
+
+        Timber.w("Emitting health state from %s", this)
 
         if (isInProlongedBadHealth()) {
             Timber.i("App health check caught some problem(s)")
@@ -103,12 +107,28 @@ class AppTPHealthMonitor @Inject constructor(
         }
     }
 
+    private fun sampleTracerPackets() {
+        val allTraces = tracerPacketRegister.getAllTraces()
+        val successfulTraces = allTraces.count { it is TracerPacketRegister.TracerSummary.Completed }
+        when(healthClassifier.determineHealthTracerPackets(allTraces.size, successfulTraces)) {
+            is BadHealth -> tracerPacketAlertDuration++
+            else -> tracerPacketAlertDuration = 0
+        }
+    }
+
+    private fun sampleSocketExceptions() {
+        with(numberOpenTcpConnections()) {
+            sampleSocketReadExceptions(this)
+            sampleSocketWriteExceptions(this)
+            sampleSocketConnectExceptions(this)
+        }
+    }
+
     private fun sampleTunReadQueueReadRate() {
         val tunReads = healthMetricCounter.getStat(TUN_READ())
         val readFromNetworkQueue = healthMetricCounter.getStat(REMOVE_FROM_DEVICE_TO_NETWORK_QUEUE())
 
         when (healthClassifier.determineHealthTunInputQueueReadRatio(tunReads, readFromNetworkQueue)) {
-            is GoodHealth -> tunReadQueueReadAlertDuration = 0
             is BadHealth -> tunReadQueueReadAlertDuration++
             else -> tunReadQueueReadAlertDuration = 0
         }
@@ -118,7 +138,6 @@ class AppTPHealthMonitor @Inject constructor(
         val readExceptions = healthMetricCounter.getStat(SOCKET_CHANNEL_READ_EXCEPTION())
 
         when (healthClassifier.determineHealthSocketChannelReadExceptions(readExceptions, openConnections)) {
-            is GoodHealth -> socketChannelReadExceptionAlertDuration = 0
             is BadHealth -> socketChannelReadExceptionAlertDuration++
             else -> socketChannelReadExceptionAlertDuration = 0
         }
@@ -128,7 +147,6 @@ class AppTPHealthMonitor @Inject constructor(
         val writeExceptions = healthMetricCounter.getStat(SOCKET_CHANNEL_WRITE_EXCEPTION())
 
         when (healthClassifier.determineHealthSocketChannelWriteExceptions(writeExceptions, openConnections)) {
-            is GoodHealth -> socketChannelWriteExceptionAlertDuration = 0
             is BadHealth -> socketChannelWriteExceptionAlertDuration++
             else -> socketChannelWriteExceptionAlertDuration = 0
         }
@@ -138,7 +156,6 @@ class AppTPHealthMonitor @Inject constructor(
         val connectExceptions = healthMetricCounter.getStat(SOCKET_CHANNEL_CONNECT_EXCEPTION())
 
         when (healthClassifier.determineHealthSocketChannelWriteExceptions(connectExceptions, openConnections)) {
-            is GoodHealth -> socketChannelConnectExceptionAlertDuration = 0
             is BadHealth -> socketChannelConnectExceptionAlertDuration++
             else -> socketChannelConnectExceptionAlertDuration = 0
         }
@@ -160,6 +177,10 @@ class AppTPHealthMonitor @Inject constructor(
         }
 
         if (socketChannelConnectExceptionAlertDuration >= 5) {
+            badHealthFlag = true
+        }
+
+        if (tracerPacketAlertDuration >= 5) {
             badHealthFlag = true
         }
 
@@ -211,7 +232,7 @@ class AppTPHealthMonitor @Inject constructor(
     }
 
     companion object {
-        private const val MONITORING_INTERVAL_MS: Long = 1_000
+        private const val MONITORING_INTERVAL_MS: Long = 1_000 // todo: make longer; 10s ?
         private const val TRACER_INJECTION_FREQUENCY_MS: Long = 5_000
 
         const val BAD_HEALTH_NOTIFICATION_ID = 9890

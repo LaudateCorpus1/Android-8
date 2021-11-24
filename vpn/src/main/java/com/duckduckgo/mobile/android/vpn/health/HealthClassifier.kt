@@ -45,6 +45,11 @@ class HealthClassifier @Inject constructor() {
         return socketChannelConnectExceptionRule.healthStatus(connectExceptions, openedConnections)
     }
 
+    fun determineHealthTracerPackets(totalTraces: Int, successfulTraces: Int): HealthState {
+        if (totalTraces < 10) return Initializing
+        return if (percentage(successfulTraces.toLong(), totalTraces.toLong()) >= 95) GoodHealth else BadHealth
+    }
+
     companion object {
         fun percentage(numerator: Long, denominator: Long): Double {
             if (denominator == 0L) return 0.0

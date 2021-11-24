@@ -26,17 +26,17 @@ import androidx.core.app.NotificationManagerCompat
 import com.duckduckgo.mobile.android.vpn.R
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-import timber.log.Timber
+import java.util.concurrent.TimeUnit
 
 class HealthNotificationManager(private val context: Context) {
 
     var shouldShowNotifications: Boolean = true
 
     suspend fun showBadHealthNotification() {
-        if (!shouldShowNotifications) {
-            Timber.v("Not showing health notifications.")
-            return
-        }
+//        if (!shouldShowNotifications) {
+//            Timber.v("Not showing health notifications.")
+//            return
+//        }
 
         val target = Intent().also {
             it.setClassName(context.packageName, "dummy.ui.VpnDiagnosticsActivity")
@@ -46,12 +46,19 @@ class HealthNotificationManager(private val context: Context) {
             .addNextIntentWithParentStack(target)
             .getPendingIntent(0, PendingIntent.FLAG_UPDATE_CURRENT)
 
+        // todo - make these do something different
+        val assertGoodPendingIntent = pendingIntent
+        val assertBadPendingIntent = assertGoodPendingIntent
+
         val notification = NotificationCompat.Builder(context, "notificationid")
             .setSmallIcon(R.drawable.ic_baseline_mood_bad_24)
-            .setContentTitle("hello")
-            .setContentText("it looks like the VPN Service might be in bad health")
+            .setContentTitle("AppTP Health Monitor")
+            .setContentText("it looks like AppTP might be in bad health. Choose one of the actions to confirm if there is a problem.")
             .setContentIntent(pendingIntent)
+            .addAction(0, "All good", assertGoodPendingIntent)
+            .addAction(0, "There's a problem", assertBadPendingIntent)
             .setOnlyAlertOnce(true)
+            .setTimeoutAfter(TimeUnit.SECONDS.toMillis(10))
             .build()
 
         withContext(Dispatchers.Main) {

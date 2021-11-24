@@ -23,6 +23,7 @@ import com.duckduckgo.app.browser.R
 import com.duckduckgo.app.global.DuckDuckGoActivity
 import com.duckduckgo.app.onboarding.ui.OnboardingActivity
 import com.duckduckgo.app.statistics.VariantManager
+import dummy.ui.VpnDiagnosticsActivity
 import kotlinx.coroutines.MainScope
 import kotlinx.coroutines.launch
 import javax.inject.Inject
@@ -61,6 +62,8 @@ class LaunchBridgeActivity : DuckDuckGoActivity() {
                 showHome()
             }
         }
+
+        startActivity(VpnDiagnosticsActivity.intent(this))
     }
 
     private fun showOnboarding() {

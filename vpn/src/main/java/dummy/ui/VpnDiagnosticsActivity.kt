@@ -22,6 +22,7 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities.*
 import android.os.Build
 import android.os.Bundle
+import android.os.Process
 import android.view.Menu
 import android.view.MenuItem
 import androidx.annotation.RequiresApi
@@ -86,13 +87,11 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
 
     private val numberFormatter = NumberFormat.getNumberInstance().also { it.maximumFractionDigits = 2 }
 
-    private val automaticTracerInsertionJob = ConflatedJob()
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         binding = ActivityVpnDiagnosticsBinding.inflate(layoutInflater)
         setContentView(binding.root)
-        setSupportActionBar(findViewById(R.id.toolbar))
+        setupToolbar(binding.toolbar)
 
         AndroidInjection.inject(this)
 
@@ -104,6 +103,7 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
+                Timber.i("appHealthMonitor: %s (pid=%d)", appTPHealthMonitor, Process.myPid())
                 appTPHealthMonitor.healthState.collect { healthState ->
                     Timber.i("Health is %s", healthState::class.java.simpleName)
                     val healthIndicator = when (healthState) {
@@ -124,18 +124,6 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
             tracerPacketRegister.deleteAll()
         }
 
-        binding.insertTracerButton.setOnClickListener {
-            insertTracer()
-        }
-
-        binding.toggleTracers.setOnClickListener {
-            if (automaticTracerInsertionJob.isActive) {
-                stopTracing()
-            } else {
-                startTracing()
-            }
-        }
-
         binding.simulateGoodHealth.setOnClickListener {
             appTPHealthMonitor.simulateHealthState(true)
         }
@@ -147,28 +135,6 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
         binding.noSimulation.setOnClickListener {
             appTPHealthMonitor.simulateHealthState(null)
         }
-    }
-
-    private fun startTracing() {
-        binding.toggleTracers.text = "Stop tracing"
-        automaticTracerInsertionJob += lifecycleScope.launch {
-            while (isActive) {
-                insertTracer()
-                delay(1_000)
-            }
-        }
-    }
-
-    private fun stopTracing() {
-        binding.toggleTracers.text = "Start tracing"
-        automaticTracerInsertionJob.cancel()
-    }
-
-    private fun insertTracer() {
-        val packet = tracerPacketBuilder.build()
-        tracerPacketRegister.logEvent(TracerEvent(packet.tracerId, TracedState.CREATED))
-        tracerPacketRegister.logEvent(TracerEvent(packet.tracerId, TracedState.ADDED_TO_NETWORK_TO_DEVICE_QUEUE))
-        vpnQueues.tcpDeviceToNetwork.offer(packet)
     }
 
     private fun updateStatus() {

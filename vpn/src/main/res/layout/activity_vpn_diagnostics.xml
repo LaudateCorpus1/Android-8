@@ -189,31 +189,11 @@
                         android:textSize="18sp"
                         tools:text="queue write / TUN read: 10" />
 
-                <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:gravity="center_horizontal"
-                        android:orientation="horizontal">
-
-                    <Button
-                            android:id="@+id/insertTracerButton"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="Inject tracer" />
-
                     <Button
                             android:id="@+id/clearTracersButton"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
                             android:text="Clear tracers" />
-
-                    <Button
-                            android:id="@+id/toggleTracers"
-                            android:layout_width="wrap_content"
-                            android:text="Tracers toggle"
-                            android:layout_height="wrap_content" />
-
-                </LinearLayout>
 
                 <LinearLayout
                         android:layout_width="match_parent"

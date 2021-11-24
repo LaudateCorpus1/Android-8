@@ -157,19 +157,19 @@ class HealthMetricCounter @Inject constructor(
     private fun StringBuilder.socketChannelReadExceptionMetrics() {
         val recentTimeThreshold = now - WINDOW_DURATION_MS
         val stat = getStat(SOCKET_CHANNEL_READ_EXCEPTION(), recentTimeThreshold)
-        append(String.format("Socket read exceptions: %d", stat))
+        append(String.format("\nSocket read exceptions: %d", stat))
     }
 
     private fun StringBuilder.socketChannelWriteExceptionMetrics() {
         val recentTimeThreshold = now - WINDOW_DURATION_MS
         val stat = getStat(SOCKET_CHANNEL_WRITE_EXCEPTION(), recentTimeThreshold)
-        append(String.format("Socket write exceptions: %d", stat))
+        append(String.format(" Socket write exceptions: %d", stat))
     }
 
     private fun StringBuilder.socketChannelConnectExceptionMetrics() {
         val recentTimeThreshold = now - WINDOW_DURATION_MS
         val stat = getStat(SOCKET_CHANNEL_CONNECT_EXCEPTION(), recentTimeThreshold)
-        append(String.format("Socket connect exceptions: %d", stat))
+        append(String.format(" Socket connect exceptions: %d", stat))
     }
 
     private fun calculatePercentage(numerator: Long, denominator: Long): String {
