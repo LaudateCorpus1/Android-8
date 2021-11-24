@@ -38,7 +38,6 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import timber.log.Timber
 import javax.inject.Inject
-import javax.inject.Singleton
 
 @VpnScope
 @ContributesMultibinding(VpnObjectGraph::class)
@@ -83,7 +82,7 @@ class AppTPHealthMonitor @Inject constructor(
         Timber.w("ApptP: PID: %d", Process.myPid())
 
         val vpnState = vpnStateCollector.collectVpnState(applicationContext.packageName)
-        //Timber.v("VPNSTATE:\n%s", vpnState.toString(4))
+        // Timber.v("VPNSTATE:\n%s", vpnState.toString(4))
 
         sampleTunReadQueueReadRate()
         sampleSocketExceptions()
@@ -110,7 +109,7 @@ class AppTPHealthMonitor @Inject constructor(
     private fun sampleTracerPackets() {
         val allTraces = tracerPacketRegister.getAllTraces()
         val successfulTraces = allTraces.count { it is TracerPacketRegister.TracerSummary.Completed }
-        when(healthClassifier.determineHealthTracerPackets(allTraces.size, successfulTraces)) {
+        when (healthClassifier.determineHealthTracerPackets(allTraces.size, successfulTraces)) {
             is BadHealth -> tracerPacketAlertDuration++
             else -> tracerPacketAlertDuration = 0
         }
