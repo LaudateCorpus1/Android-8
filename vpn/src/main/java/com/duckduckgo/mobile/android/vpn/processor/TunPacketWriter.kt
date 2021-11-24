@@ -17,6 +17,10 @@
 package com.duckduckgo.mobile.android.vpn.processor
 
 import android.os.ParcelFileDescriptor
+import android.os.Process
+import com.duckduckgo.mobile.android.vpn.health.TracedState.REMOVED_FROM_NETWORK_TO_DEVICE_QUEUE
+import com.duckduckgo.mobile.android.vpn.health.TracerEvent
+import com.duckduckgo.mobile.android.vpn.health.TracerPacketRegister
 import com.duckduckgo.mobile.android.vpn.service.VpnQueues
 import timber.log.Timber
 import xyz.hexene.localvpn.ByteBufferPool
@@ -24,11 +28,16 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.nio.channels.FileChannel
 
-class TunPacketWriter(private val tunInterface: ParcelFileDescriptor, private val queues: VpnQueues) : Runnable {
+class TunPacketWriter(
+    private val tunInterface: ParcelFileDescriptor,
+    private val queues: VpnQueues,
+    private val tracerPacketRegister: TracerPacketRegister
+) : Runnable {
 
     private var running = false
 
     override fun run() {
+        Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_DISPLAY)
         Timber.w("TunPacketWriter started")
 
         running = true
@@ -54,6 +63,18 @@ class TunPacketWriter(private val tunInterface: ParcelFileDescriptor, private va
         val bufferFromNetwork = queues.networkToDevice.take() ?: return
         try {
             bufferFromNetwork.flip()
+
+            if (bufferFromNetwork.get(0) == (-1).toByte()) {
+                val timeReceived = System.nanoTime()
+                bufferFromNetwork.get()
+                val tracerIdLength = bufferFromNetwork.int
+                val bytes = ByteArray(tracerIdLength)
+                bufferFromNetwork.get(bytes)
+                val tracerId = String(bytes)
+                tracerPacketRegister.logEvent(TracerEvent(tracerId, REMOVED_FROM_NETWORK_TO_DEVICE_QUEUE, timeReceived))
+                Timber.w("Found tracer packet %s on the way out to the TUN", tracerId)
+                return
+            }
 
             while (bufferFromNetwork.hasRemaining()) {
                 val bytesWrittenToVpn = vpnOutput.write(bufferFromNetwork)

@@ -16,6 +16,10 @@
 
 package com.duckduckgo.mobile.android.vpn.processor.tcp
 
+import com.duckduckgo.mobile.android.vpn.health.HealthMetricCounter
+import com.duckduckgo.mobile.android.vpn.health.TracerEvent
+import com.duckduckgo.mobile.android.vpn.health.TracedState
+import com.duckduckgo.mobile.android.vpn.health.TracerPacketRegister
 import com.duckduckgo.mobile.android.vpn.processor.packet.connectionInfo
 import com.duckduckgo.mobile.android.vpn.processor.requestingapp.AppNameResolver
 import com.duckduckgo.mobile.android.vpn.processor.requestingapp.AppNameResolver.OriginatingApp
@@ -64,7 +68,9 @@ class TcpDeviceToNetwork(
     private val hostnameExtractor: HostnameExtractor,
     private val payloadBytesExtractor: PayloadBytesExtractor,
     private val recentAppTrackerCache: RecentAppTrackerCache,
-    private val vpnCoroutineScope: CoroutineScope
+    private val vpnCoroutineScope: CoroutineScope,
+    private val tracerRegister: TracerPacketRegister,
+    private val healthMetricCounter: HealthMetricCounter
 ) {
 
     /**
@@ -73,6 +79,13 @@ class TcpDeviceToNetwork(
      */
     fun deviceToNetworkProcessing() {
         val packet = queues.tcpDeviceToNetwork.take() ?: return
+
+        if (packet.isTracer) {
+            processTracerPacker(packet)
+            return
+        }
+
+        healthMetricCounter.onReadFromDeviceToNetworkQueue()
 
         val destinationAddress = packet.ip4Header.destinationAddress
         val destinationPort = packet.tcpHeader.destinationPort
@@ -98,14 +111,30 @@ class TcpDeviceToNetwork(
         }
     }
 
+    private fun processTracerPacker(packet: Packet) {
+        val tracerId = packet.tracerId
+        tracerRegister.logEvent(TracerEvent(tracerId, TracedState.REMOVED_FROM_DEVICE_TO_NETWORK_QUEUE))
+
+        val idLength = tracerId.length
+        val idBytes = tracerId.toByteArray()
+
+        val byteBuffer = ByteBufferPool.acquire()
+        byteBuffer.put(-1)
+        byteBuffer.putInt(idLength)
+        byteBuffer.put(idBytes)
+
+        tracerRegister.logEvent(TracerEvent(tracerId, TracedState.ADDED_TO_NETWORK_TO_DEVICE_QUEUE))
+        queues.networkToDevice.offer(byteBuffer)
+    }
+
     private fun processPacketTcbNotInitialized(connectionKey: String, packet: Packet, totalPacketLength: Int, connectionParams: TcpConnectionParams) {
         Timber.v(
             "New packet. %s. TCB not initialized. %s. Packet length: %d.  Data length: %d",
             connectionKey,
             TcpPacketProcessor.logPacketDetails(
                 packet,
-                packet.tcpHeader.sequenceNumber,
-                packet.tcpHeader.acknowledgementNumber
+                packet.tcpHeader?.sequenceNumber,
+                packet.tcpHeader?.acknowledgementNumber
             ),
             totalPacketLength,
             packet.tcpPayloadSize(true)
@@ -292,7 +321,13 @@ class TcpDeviceToNetwork(
         }
     }
 
-    private fun processTrackingRequestPacket(isATrackerRetryRequest: Boolean, tcb: TCB, requestingApp: OriginatingApp, packet: Packet, payloadSize: Int) {
+    private fun processTrackingRequestPacket(
+        isATrackerRetryRequest: Boolean,
+        tcb: TCB,
+        requestingApp: OriginatingApp,
+        packet: Packet,
+        payloadSize: Int
+    ) {
         if (isATrackerRetryRequest) {
             tcb.enterGhostingMode()
             processPacketInGhostingMode(tcb)

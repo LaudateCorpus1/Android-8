@@ -19,6 +19,8 @@ package com.duckduckgo.mobile.android.vpn.processor.tcp
 import android.os.Process.THREAD_PRIORITY_URGENT_DISPLAY
 import android.os.Process.setThreadPriority
 import com.duckduckgo.mobile.android.vpn.di.TcpNetworkSelector
+import com.duckduckgo.mobile.android.vpn.health.HealthMetricCounter
+import com.duckduckgo.mobile.android.vpn.health.TracerPacketRegister
 import com.duckduckgo.mobile.android.vpn.processor.requestingapp.AppNameResolver
 import com.duckduckgo.mobile.android.vpn.processor.requestingapp.OriginatingAppPackageIdentifierStrategy
 import com.duckduckgo.mobile.android.vpn.processor.tcp.ConnectionInitializer.TcpConnectionParams
@@ -57,13 +59,15 @@ class TcpPacketProcessor @AssistedInject constructor(
     localAddressDetector: LocalIpAddressDetector,
     originatingAppPackageResolver: OriginatingAppPackageIdentifierStrategy,
     appNameResolver: AppNameResolver,
-    @TcpNetworkSelector selector: Selector,
+    @TcpNetworkSelector val selector: Selector,
     tcbCloser: TCBCloser,
     hostnameExtractor: HostnameExtractor,
     payloadBytesExtractor: PayloadBytesExtractor,
     tcpSocketWriter: TcpSocketWriter,
     recentAppTrackerCache: RecentAppTrackerCache,
-    @Assisted private val vpnCoroutineScope: CoroutineScope
+    @Assisted private val vpnCoroutineScope: CoroutineScope,
+    tracerPacketRegister: TracerPacketRegister,
+    healthMetricCounter: HealthMetricCounter
 ) : Runnable {
 
     @AssistedFactory
@@ -81,7 +85,8 @@ class TcpPacketProcessor @AssistedInject constructor(
         tcpSocketWriter = tcpSocketWriter,
         packetPersister = packetPersister,
         tcbCloser = tcbCloser,
-        vpnCoroutineScope = vpnCoroutineScope
+        vpnCoroutineScope = vpnCoroutineScope,
+        healthMetricCounter = healthMetricCounter
     )
     private val tcpDeviceToNetwork =
         TcpDeviceToNetwork(
@@ -98,7 +103,9 @@ class TcpPacketProcessor @AssistedInject constructor(
             hostnameExtractor = hostnameExtractor,
             payloadBytesExtractor = payloadBytesExtractor,
             recentAppTrackerCache = recentAppTrackerCache,
-            vpnCoroutineScope = vpnCoroutineScope
+            vpnCoroutineScope = vpnCoroutineScope,
+            tracerRegister = tracerPacketRegister,
+            healthMetricCounter = healthMetricCounter
         )
 
     override fun run() {
@@ -173,7 +180,7 @@ class TcpPacketProcessor @AssistedInject constructor(
     )
 
     companion object {
-        fun logPacketDetails(packet: Packet, sequenceNumber: Long, acknowledgementNumber: Long): String {
+        fun logPacketDetails(packet: Packet, sequenceNumber: Long?, acknowledgementNumber: Long?): String {
             with(packet.tcpHeader) {
                 return "\tflags:[ ${isSYN.printFlag("SYN")}${isACK.printFlag("ACK")}${isFIN.printFlag("FIN")}${isPSH.printFlag("PSH")}${
                 isRST.printFlag(

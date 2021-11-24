@@ -24,83 +24,251 @@ import android.os.Build
 import android.os.Bundle
 import android.view.Menu
 import android.view.MenuItem
-import android.widget.TextView
 import androidx.annotation.RequiresApi
 import androidx.appcompat.app.AlertDialog
-import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
+import androidx.lifecycle.repeatOnLifecycle
+import com.duckduckgo.app.global.DuckDuckGoActivity
 import com.duckduckgo.app.global.extensions.historicalExitReasonsByProcessName
-import com.duckduckgo.app.trackerdetection.api.WebTrackersBlockedRepository
+import com.duckduckgo.app.utils.ConflatedJob
+import com.duckduckgo.mobile.android.ui.view.rightDrawable
 import com.duckduckgo.mobile.android.vpn.R
+import com.duckduckgo.mobile.android.vpn.databinding.ActivityVpnDiagnosticsBinding
+import com.duckduckgo.mobile.android.vpn.health.*
+import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.ADD_TO_DEVICE_TO_NETWORK_QUEUE
+import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.REMOVE_FROM_DEVICE_TO_NETWORK_QUEUE
+import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.SOCKET_CHANNEL_CONNECT_EXCEPTION
+import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.SOCKET_CHANNEL_READ_EXCEPTION
+import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.SOCKET_CHANNEL_WRITE_EXCEPTION
+import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.TUN_READ
+import com.duckduckgo.mobile.android.vpn.health.TracerPacketRegister.TracerSummary.Completed
 import com.duckduckgo.mobile.android.vpn.model.TimePassed
+import com.duckduckgo.mobile.android.vpn.service.VpnQueues
 import com.duckduckgo.mobile.android.vpn.stats.AppTrackerBlockingStatsRepository
-import com.duckduckgo.mobile.android.vpn.store.DatabaseDateFormatter
 import dagger.android.AndroidInjection
 import kotlinx.coroutines.*
+import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.firstOrNull
-import org.threeten.bp.LocalDateTime
+import timber.log.Timber
 import java.net.Inet4Address
 import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.NetworkInterface
+import java.text.NumberFormat
 import javax.inject.Inject
 
-class VpnDiagnosticsActivity : AppCompatActivity(R.layout.activity_vpn_diagnostics), CoroutineScope by MainScope() {
+class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope() {
 
-    private lateinit var networkAddresses: TextView
-    private lateinit var meteredConnectionText: TextView
-    private lateinit var vpnActiveText: TextView
-    private lateinit var networkAvailable: TextView
-    private lateinit var runningTime: TextView
-    private lateinit var appTrackersTextView: TextView
-    private lateinit var webTrackersTextView: TextView
-    private lateinit var dnsServersText: TextView
+    @Inject
+    lateinit var tracerPacketBuilder: TracerPacketBuilder
 
     private lateinit var connectivityManager: ConnectivityManager
+
+    private lateinit var binding: ActivityVpnDiagnosticsBinding
 
     @Inject
     lateinit var repository: AppTrackerBlockingStatsRepository
 
     @Inject
-    lateinit var webTrackersBlockedRepository: WebTrackersBlockedRepository
+    lateinit var healthMetricCounter: HealthMetricCounter
+
+    @Inject
+    lateinit var tracerPacketRegister: TracerPacketRegister
+
+    @Inject
+    lateinit var vpnQueues: VpnQueues
+
+    @Inject
+    lateinit var appTPHealthMonitor: AppTPHealthMonitor
 
     private var timerUpdateJob: Job? = null
 
+    private val numberFormatter = NumberFormat.getNumberInstance().also { it.maximumFractionDigits = 2 }
+
+    private val automaticTracerInsertionJob = ConflatedJob()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        binding = ActivityVpnDiagnosticsBinding.inflate(layoutInflater)
+        setContentView(binding.root)
         setSupportActionBar(findViewById(R.id.toolbar))
 
         AndroidInjection.inject(this)
 
         connectivityManager = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
 
-        setViewReferences()
-        updateNetworkStatus()
+        // stopTracing()
+        configureEventHandlers()
+        updateStatus()
+
+        lifecycleScope.launch {
+            repeatOnLifecycle(Lifecycle.State.STARTED) {
+                appTPHealthMonitor.healthState.collect { healthState ->
+                    Timber.i("Health is %s", healthState::class.java.simpleName)
+                    val healthIndicator = when (healthState) {
+                        is AppTPHealthMonitor.HealthState.GoodHealth -> R.drawable.ic_baseline_mood_happy_24
+                        is AppTPHealthMonitor.HealthState.BadHealth -> R.drawable.ic_baseline_mood_bad_24
+                        else -> 0
+                    }
+                    withContext(Dispatchers.Main) {
+                        binding.healthMetricsLabel.rightDrawable(healthIndicator)
+                    }
+                }
+            }
+        }
     }
 
-    private fun updateNetworkStatus() {
+    private fun configureEventHandlers() {
+        binding.clearTracersButton.setOnClickListener {
+            tracerPacketRegister.deleteAll()
+        }
+
+        binding.insertTracerButton.setOnClickListener {
+            insertTracer()
+        }
+
+        binding.toggleTracers.setOnClickListener {
+            if (automaticTracerInsertionJob.isActive) {
+                stopTracing()
+            } else {
+                startTracing()
+            }
+        }
+
+        binding.simulateGoodHealth.setOnClickListener {
+            appTPHealthMonitor.simulateHealthState(true)
+        }
+
+        binding.simulateBadHealth.setOnClickListener {
+            appTPHealthMonitor.simulateHealthState(false)
+        }
+
+        binding.noSimulation.setOnClickListener {
+            appTPHealthMonitor.simulateHealthState(null)
+        }
+    }
+
+    private fun startTracing() {
+        binding.toggleTracers.text = "Stop tracing"
+        automaticTracerInsertionJob += lifecycleScope.launch {
+            while (isActive) {
+                insertTracer()
+                delay(1_000)
+            }
+        }
+    }
+
+    private fun stopTracing() {
+        binding.toggleTracers.text = "Start tracing"
+        automaticTracerInsertionJob.cancel()
+    }
+
+    private fun insertTracer() {
+        val packet = tracerPacketBuilder.build()
+        tracerPacketRegister.logEvent(TracerEvent(packet.tracerId, TracedState.CREATED))
+        tracerPacketRegister.logEvent(TracerEvent(packet.tracerId, TracedState.ADDED_TO_NETWORK_TO_DEVICE_QUEUE))
+        vpnQueues.tcpDeviceToNetwork.offer(packet)
+    }
+
+    private fun updateStatus() {
         lifecycleScope.launch(Dispatchers.IO) {
             val networkInfo = retrieveNetworkStatusInfo()
             val dnsInfo = retrieveDnsInfo()
             val addresses = retrieveIpAddressesInfo(networkInfo)
             val totalAppTrackers = retrieveAppTrackersBlockedInfo()
-            val totalWebTrackers = retrieveWebTrackersBlockedInfo()
             val runningTimeFormatted = retrieveRunningTimeInfo()
             val appTrackersBlockedFormatted = generateTrackersBlocked(totalAppTrackers)
-            val webTrackersBlockedFormatted = generateTrackersBlocked(totalWebTrackers)
+            val tracerInfo = retrieveTracerInfo()
+            val healthMetricsInfo = retrieveHealthMetricsInfo()
+
+            val healthMetricsFormatted = generateHealthMetricsStrings(healthMetricsInfo)
 
             withContext(Dispatchers.Main) {
-                networkAddresses.text = addresses
-                meteredConnectionText.text = getString(R.string.atp_MeteredConnection, networkInfo.metered.toString())
-                vpnActiveText.text = getString(R.string.atp_ConnectionStatus, networkInfo.vpn.toString())
-                networkAvailable.text = getString(R.string.atp_NetworkAvailable, networkInfo.connectedToInternet.toString())
-                runningTime.text = runningTimeFormatted
-                appTrackersTextView.text = "App $appTrackersBlockedFormatted"
-                webTrackersTextView.text = "Web $webTrackersBlockedFormatted"
-                dnsServersText.text = getString(R.string.atp_DnsServers, dnsInfo)
+                binding.networkAddresses.text = addresses
+                binding.meteredConnectionStatus.text = getString(R.string.atp_MeteredConnection, networkInfo.metered.toString())
+                binding.vpnStatus.text = getString(R.string.atp_ConnectionStatus, networkInfo.vpn.toString())
+                binding.networkAvailable.text = getString(R.string.atp_NetworkAvailable, networkInfo.connectedToInternet.toString())
+                binding.runningTime.text = runningTimeFormatted
+                binding.appTrackersBlockedText.text = "App $appTrackersBlockedFormatted"
+                binding.dnsServersText.text = getString(R.string.atp_DnsServers, dnsInfo)
+                binding.tracerCompletionTimeMean.text =
+                    String.format("Average trace time: %s ms", numberFormatter.format(tracerInfo.meanSuccessfulTime))
+                binding.tracerNumberSuccessful.text = String.format("# successful traces: %d", tracerInfo.numberSuccessfulTraces)
+                binding.tracerNumberFailed.text = String.format("# failed traces: %d", tracerInfo.numberFailedTraces)
+
+                binding.healthMetrics.text = healthMetricsFormatted
             }
         }
+    }
 
+    private fun generateHealthMetricsStrings(healthMetricsInfo: HealthMetricsInfo): String {
+        val healthMetricsStrings = mutableListOf<String>()
+
+        healthMetricsStrings.add(
+            String.format(
+                "\n\ndevice-to-network queue writes: %d\ntun reads: %d\nrate: %s",
+                healthMetricsInfo.writtenToDeviceToNetworkQueue,
+                healthMetricsInfo.tunPacketReceived,
+                calculatePercentage(healthMetricsInfo.writtenToDeviceToNetworkQueue, healthMetricsInfo.tunPacketReceived)
+            )
+        )
+
+        healthMetricsStrings.add(
+            String.format(
+                "\n\ndevice-to-network queue writes: %d\nqueue reads: %d\nrate: %s",
+                healthMetricsInfo.writtenToDeviceToNetworkQueue,
+                healthMetricsInfo.removeFromDeviceToNetworkQueue,
+                calculatePercentage(healthMetricsInfo.writtenToDeviceToNetworkQueue, healthMetricsInfo.removeFromDeviceToNetworkQueue)
+            )
+        )
+
+        healthMetricsStrings.add(
+            String.format(
+                "\n\nSocket exceptions:\nRead: %d, Write: %d, Connect: %d",
+                healthMetricsInfo.socketReadExceptions, healthMetricsInfo.socketWriteExceptions, healthMetricsInfo.socketConnectException
+            )
+        )
+
+        val sb = StringBuilder()
+        healthMetricsStrings.forEach {
+            sb.append(it)
+        }
+
+        return sb.toString()
+    }
+
+    private fun calculatePercentage(numerator: Long, denominator: Long): String {
+        if (denominator == 0L) return "0%"
+        return String.format("%s%%", numberFormatter.format(numerator.toDouble() / denominator * 100))
+    }
+
+    private fun retrieveHealthMetricsInfo(): HealthMetricsInfo {
+        val tunPacketReceived = healthMetricCounter.getStat(TUN_READ())
+        val removeFromDeviceToNetworkQueue = healthMetricCounter.getStat(REMOVE_FROM_DEVICE_TO_NETWORK_QUEUE())
+        val writtenToDeviceToNetworkQueue = healthMetricCounter.getStat(ADD_TO_DEVICE_TO_NETWORK_QUEUE())
+        val socketReadExceptions = healthMetricCounter.getStat(SOCKET_CHANNEL_READ_EXCEPTION())
+        val socketWriteExceptions = healthMetricCounter.getStat(SOCKET_CHANNEL_WRITE_EXCEPTION())
+        val socketConnectExceptions = healthMetricCounter.getStat(SOCKET_CHANNEL_CONNECT_EXCEPTION())
+        return HealthMetricsInfo(
+            tunPacketReceived = tunPacketReceived,
+            writtenToDeviceToNetworkQueue = writtenToDeviceToNetworkQueue,
+            removeFromDeviceToNetworkQueue = removeFromDeviceToNetworkQueue,
+            socketReadExceptions = socketReadExceptions,
+            socketWriteExceptions = socketWriteExceptions,
+            socketConnectException = socketConnectExceptions
+        )
+
+    }
+
+    private fun retrieveTracerInfo(): TracerInfo {
+        val traces = tracerPacketRegister.getAllTraces()
+        val completedTraces = traces.filterIsInstance<Completed>()
+
+        val meanCompletedNs =
+            if (completedTraces.isEmpty()) 0.0 else completedTraces.sumOf { it.timeToCompleteNanos }.toDouble() / completedTraces.size
+        val meanCompletedMs = meanCompletedNs / 1_000_000
+        return TracerInfo(completedTraces.size, traces.size - completedTraces.size, meanCompletedMs)
     }
 
     private fun retrieveHistoricalCrashInfo(): AppExitHistory {
@@ -133,12 +301,6 @@ class VpnDiagnosticsActivity : AppCompatActivity(R.layout.activity_vpn_diagnosti
         generateTimeRunningMessage(repository.getRunningTimeMillis({ repository.noStartDate() }).firstOrNull() ?: 0L)
 
     private suspend fun retrieveAppTrackersBlockedInfo() = (repository.getVpnTrackers({ repository.noStartDate() }).firstOrNull() ?: emptyList()).size
-
-    private suspend fun retrieveWebTrackersBlockedInfo() = (webTrackersBlockedRepository.get({ noStartDate() }).firstOrNull() ?: emptyList()).size
-
-    private fun noStartDate(): String {
-        return DatabaseDateFormatter.timestamp(LocalDateTime.of(2000, 1, 1, 0, 0))
-    }
 
     private fun retrieveIpAddressesInfo(networkInfo: NetworkInfo): String {
         return if (networkInfo.networks.isEmpty()) {
@@ -256,26 +418,19 @@ class VpnDiagnosticsActivity : AppCompatActivity(R.layout.activity_vpn_diagnosti
         timerUpdateJob?.cancel()
         timerUpdateJob = lifecycleScope.launch {
             while (isActive) {
-                updateNetworkStatus()
+                updateStatus()
                 delay(1_000)
             }
         }
+
+        appTPHealthMonitor.toggleNotifications(false)
     }
 
     override fun onStop() {
         super.onStop()
         timerUpdateJob?.cancel()
-    }
 
-    private fun setViewReferences() {
-        networkAddresses = findViewById(R.id.networkAddresses)
-        meteredConnectionText = findViewById(R.id.meteredConnectionStatus)
-        vpnActiveText = findViewById(R.id.vpnStatus)
-        networkAvailable = findViewById(R.id.networkAvailable)
-        runningTime = findViewById(R.id.runningTime)
-        appTrackersTextView = findViewById(R.id.appTrackersBlockedText)
-        webTrackersTextView = findViewById(R.id.webTrackersBlockedText)
-        dnsServersText = findViewById(R.id.dnsServersText)
+        appTPHealthMonitor.toggleNotifications(true)
     }
 
     override fun onCreateOptionsMenu(menu: Menu?): Boolean {
@@ -286,7 +441,7 @@ class VpnDiagnosticsActivity : AppCompatActivity(R.layout.activity_vpn_diagnosti
     override fun onOptionsItemSelected(item: MenuItem): Boolean {
         return when (item.itemId) {
             R.id.refresh -> {
-                updateNetworkStatus()
+                updateStatus()
                 true
             }
             R.id.appExitHistory -> {
@@ -352,6 +507,17 @@ data class AppExitHistory(
         }
     }
 }
+
+data class TracerInfo(val numberSuccessfulTraces: Int, val numberFailedTraces: Int, val meanSuccessfulTime: Double)
+
+data class HealthMetricsInfo(
+    val tunPacketReceived: Long,
+    val writtenToDeviceToNetworkQueue: Long,
+    val removeFromDeviceToNetworkQueue: Long,
+    val socketReadExceptions: Long,
+    val socketWriteExceptions: Long,
+    val socketConnectException: Long
+)
 
 data class NetworkInfo(
     val networks: List<Network>,

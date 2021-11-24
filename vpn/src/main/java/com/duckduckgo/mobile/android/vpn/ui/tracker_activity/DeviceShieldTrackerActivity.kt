@@ -55,7 +55,6 @@ import com.duckduckgo.mobile.android.vpn.ui.onboarding.DeviceShieldFAQActivity
 import com.duckduckgo.mobile.android.vpn.ui.report.DeviceShieldAppTrackersInfo
 import com.google.android.material.snackbar.Snackbar
 import dummy.ui.VpnControllerActivity
-import dummy.ui.VpnDiagnosticsActivity
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.launchIn
@@ -410,7 +409,9 @@ class DeviceShieldTrackerActivity :
                 startActivity(VpnControllerActivity.intent(this)); true
             }
             R.id.diagnosticsScreen -> {
-                startActivity(VpnDiagnosticsActivity.intent(this)); true
+                val intent = Intent().also { it.setClassName(packageName, "dummy.ui.VpnDiagnosticsActivity") }
+                startActivity(intent)
+                true
             }
             R.id.customDnsServer -> {
                 val enabled = !item.isChecked
