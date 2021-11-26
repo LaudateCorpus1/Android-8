@@ -102,9 +102,8 @@ class HealthMetricCounter @Inject constructor(
         }
     }
 
-    fun getStat(type: SimpleEvent, recentTimeThreshold: Long? = null): Long {
-        val timeWindow = recentTimeThreshold ?: (now - WINDOW_DURATION_MS)
-        return healthStatsDao.eventCount(type.type, timeWindow)
+    fun getStat(type: SimpleEvent, recentTimeThresholdMillis: Long): Long {
+        return healthStatsDao.eventCount(type.type, recentTimeThresholdMillis)
     }
 
 //    fun getStatHistory(type: SimpleEvent, recentTimeThreshold: Long? = null): List<Long> {
@@ -141,7 +140,8 @@ class HealthMetricCounter @Inject constructor(
     }
 
     private fun StringBuilder.tracerPacketMetrics() {
-        val traces = tracerPacketRegister.getAllTraces()
+        val recentTimeThreshold = TimeUnit.MILLISECONDS.toNanos(now - WINDOW_DURATION_MS)
+        val traces = tracerPacketRegister.getAllTraces(recentTimeThreshold)
         val successes = traces.count { it is Completed }
 
         append(

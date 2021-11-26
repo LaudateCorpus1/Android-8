@@ -18,31 +18,29 @@ package com.duckduckgo.mobile.android.vpn.health
 
 import com.duckduckgo.mobile.android.vpn.health.AppTPHealthMonitor.HealthState
 import com.duckduckgo.mobile.android.vpn.health.AppTPHealthMonitor.HealthState.*
-import com.duckduckgo.mobile.android.vpn.health.HealthClassifier.Companion.percentage
 import timber.log.Timber
 import javax.inject.Inject
 
 class HealthClassifier @Inject constructor() {
 
-    private val tunInputQueueReadHealthRule = TunInputQueueReadHealthRule()
-    private val socketChannelReadExceptionRule = SocketChannelWriteExceptionRule()
-    private val socketChannelWriteExceptionRule = SocketChannelReadExceptionRule()
-    private val socketChannelConnectExceptionRule = SocketChannelConnectExceptionRule()
-
     fun determineHealthTunInputQueueReadRatio(tunInputs: Long, queueReads: Long): HealthState {
-        return tunInputQueueReadHealthRule.healthStatus(tunInputs, queueReads)
+        if (tunInputs < 100) return Initializing
+        return if (percentage(queueReads, tunInputs) >= 70) GoodHealth else BadHealth
     }
 
-    fun determineHealthSocketChannelReadExceptions(readExceptions: Long, openedConnections: Int): HealthState {
-        return socketChannelReadExceptionRule.healthStatus(readExceptions, openedConnections)
+    fun determineHealthSocketChannelReadExceptions(readExceptions: Long): HealthState {
+        Timber.v("There were %d socket write exceptions recently.", readExceptions)
+        return if (readExceptions >= 20) BadHealth else GoodHealth
     }
 
-    fun determineHealthSocketChannelWriteExceptions(writeExceptions: Long, openedConnections: Int): HealthState {
-        return socketChannelWriteExceptionRule.healthStatus(writeExceptions, openedConnections)
+    fun determineHealthSocketChannelWriteExceptions(writeExceptions: Long): HealthState {
+        Timber.v("There were %d socket read exceptions recently.", writeExceptions)
+        return if (writeExceptions >= 20) BadHealth else GoodHealth
     }
 
-    fun determineHealthSocketChannelConnectExceptions(connectExceptions: Long, openedConnections: Int): HealthState {
-        return socketChannelConnectExceptionRule.healthStatus(connectExceptions, openedConnections)
+    fun determineHealthSocketChannelConnectExceptions(connectExceptions: Long): HealthState {
+        Timber.v("There were %d socket connect exceptions recently.", connectExceptions)
+        return if (connectExceptions >= 20) BadHealth else GoodHealth
     }
 
     fun determineHealthTracerPackets(totalTraces: Int, successfulTraces: Int): HealthState {
@@ -55,33 +53,5 @@ class HealthClassifier @Inject constructor() {
             if (denominator == 0L) return 0.0
             return numerator.toDouble() / denominator * 100
         }
-    }
-}
-
-private class TunInputQueueReadHealthRule {
-    fun healthStatus(tunInputs: Long, queueReads: Long): HealthState {
-        if (tunInputs < 100) return Initializing
-        return if (percentage(queueReads, tunInputs) >= 70) GoodHealth else BadHealth
-    }
-}
-
-private class SocketChannelReadExceptionRule {
-    fun healthStatus(exceptions: Long, numberConnection: Int): HealthState {
-        Timber.v("There were %d socket read exceptions recently. %d open", exceptions, numberConnection)
-        return if (exceptions >= 20) BadHealth else GoodHealth
-    }
-}
-
-private class SocketChannelWriteExceptionRule {
-    fun healthStatus(exceptions: Long, numberConnection: Int): HealthState {
-        Timber.v("There were %d socket write exceptions recently. %d open", exceptions, numberConnection)
-        return if (exceptions >= 20) BadHealth else GoodHealth
-    }
-}
-
-private class SocketChannelConnectExceptionRule {
-    fun healthStatus(exceptions: Long, numberConnection: Int): HealthState {
-        Timber.v("There were %d socket connect exceptions recently. %d open", exceptions, numberConnection)
-        return if (exceptions >= 20) BadHealth else GoodHealth
     }
 }

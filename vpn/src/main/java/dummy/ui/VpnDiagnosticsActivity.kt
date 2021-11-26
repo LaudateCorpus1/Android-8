@@ -56,6 +56,7 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.NetworkInterface
 import java.text.NumberFormat
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope() {
@@ -151,15 +152,18 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
 
             withContext(Dispatchers.Main) {
                 binding.networkAddresses.text = addresses
-                binding.meteredConnectionStatus.text = getString(R.string.atp_MeteredConnection, networkInfo.metered.toString())
+                binding.meteredConnectionStatus.text =
+                    getString(R.string.atp_MeteredConnection, networkInfo.metered.toString())
                 binding.vpnStatus.text = getString(R.string.atp_ConnectionStatus, networkInfo.vpn.toString())
-                binding.networkAvailable.text = getString(R.string.atp_NetworkAvailable, networkInfo.connectedToInternet.toString())
+                binding.networkAvailable.text =
+                    getString(R.string.atp_NetworkAvailable, networkInfo.connectedToInternet.toString())
                 binding.runningTime.text = runningTimeFormatted
                 binding.appTrackersBlockedText.text = "App $appTrackersBlockedFormatted"
                 binding.dnsServersText.text = getString(R.string.atp_DnsServers, dnsInfo)
                 binding.tracerCompletionTimeMean.text =
                     String.format("Average trace time: %s ms", numberFormatter.format(tracerInfo.meanSuccessfulTime))
-                binding.tracerNumberSuccessful.text = String.format("# successful traces: %d", tracerInfo.numberSuccessfulTraces)
+                binding.tracerNumberSuccessful.text =
+                    String.format("# successful traces: %d", tracerInfo.numberSuccessfulTraces)
                 binding.tracerNumberFailed.text = String.format("# failed traces: %d", tracerInfo.numberFailedTraces)
 
                 binding.healthMetrics.text = healthMetricsFormatted
@@ -175,7 +179,10 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
                 "\n\ndevice-to-network queue writes: %d\ntun reads: %d\nrate: %s",
                 healthMetricsInfo.writtenToDeviceToNetworkQueue,
                 healthMetricsInfo.tunPacketReceived,
-                calculatePercentage(healthMetricsInfo.writtenToDeviceToNetworkQueue, healthMetricsInfo.tunPacketReceived)
+                calculatePercentage(
+                    healthMetricsInfo.writtenToDeviceToNetworkQueue,
+                    healthMetricsInfo.tunPacketReceived
+                )
             )
         )
 
@@ -184,14 +191,19 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
                 "\n\ndevice-to-network queue writes: %d\nqueue reads: %d\nrate: %s",
                 healthMetricsInfo.writtenToDeviceToNetworkQueue,
                 healthMetricsInfo.removeFromDeviceToNetworkQueue,
-                calculatePercentage(healthMetricsInfo.writtenToDeviceToNetworkQueue, healthMetricsInfo.removeFromDeviceToNetworkQueue)
+                calculatePercentage(
+                    healthMetricsInfo.writtenToDeviceToNetworkQueue,
+                    healthMetricsInfo.removeFromDeviceToNetworkQueue
+                )
             )
         )
 
         healthMetricsStrings.add(
             String.format(
                 "\n\nSocket exceptions:\nRead: %d, Write: %d, Connect: %d",
-                healthMetricsInfo.socketReadExceptions, healthMetricsInfo.socketWriteExceptions, healthMetricsInfo.socketConnectException
+                healthMetricsInfo.socketReadExceptions,
+                healthMetricsInfo.socketWriteExceptions,
+                healthMetricsInfo.socketConnectException
             )
         )
 
@@ -209,12 +221,15 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
     }
 
     private fun retrieveHealthMetricsInfo(): HealthMetricsInfo {
-        val tunPacketReceived = healthMetricCounter.getStat(TUN_READ())
-        val removeFromDeviceToNetworkQueue = healthMetricCounter.getStat(REMOVE_FROM_DEVICE_TO_NETWORK_QUEUE())
-        val writtenToDeviceToNetworkQueue = healthMetricCounter.getStat(ADD_TO_DEVICE_TO_NETWORK_QUEUE())
-        val socketReadExceptions = healthMetricCounter.getStat(SOCKET_CHANNEL_READ_EXCEPTION())
-        val socketWriteExceptions = healthMetricCounter.getStat(SOCKET_CHANNEL_WRITE_EXCEPTION())
-        val socketConnectExceptions = healthMetricCounter.getStat(SOCKET_CHANNEL_CONNECT_EXCEPTION())
+        val timeWindow = System.currentTimeMillis() - TIME_WINDOW_DURATION_MILLIS
+
+        val tunPacketReceived = healthMetricCounter.getStat(TUN_READ(), timeWindow)
+        val removeFromDeviceToNetworkQueue =
+            healthMetricCounter.getStat(REMOVE_FROM_DEVICE_TO_NETWORK_QUEUE(), timeWindow)
+        val writtenToDeviceToNetworkQueue = healthMetricCounter.getStat(ADD_TO_DEVICE_TO_NETWORK_QUEUE(), timeWindow)
+        val socketReadExceptions = healthMetricCounter.getStat(SOCKET_CHANNEL_READ_EXCEPTION(), timeWindow)
+        val socketWriteExceptions = healthMetricCounter.getStat(SOCKET_CHANNEL_WRITE_EXCEPTION(), timeWindow)
+        val socketConnectExceptions = healthMetricCounter.getStat(SOCKET_CHANNEL_CONNECT_EXCEPTION(), timeWindow)
         return HealthMetricsInfo(
             tunPacketReceived = tunPacketReceived,
             writtenToDeviceToNetworkQueue = writtenToDeviceToNetworkQueue,
@@ -227,11 +242,14 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
     }
 
     private fun retrieveTracerInfo(): TracerInfo {
-        val traces = tracerPacketRegister.getAllTraces()
+        val timeWindow = System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(TIME_WINDOW_DURATION_MILLIS)
+
+        val traces = tracerPacketRegister.getAllTraces(timeWindow)
         val completedTraces = traces.filterIsInstance<Completed>()
 
         val meanCompletedNs =
-            if (completedTraces.isEmpty()) 0.0 else completedTraces.sumOf { it.timeToCompleteNanos }.toDouble() / completedTraces.size
+            if (completedTraces.isEmpty()) 0.0 else completedTraces.sumOf { it.timeToCompleteNanos }
+                .toDouble() / completedTraces.size
         val meanCompletedMs = meanCompletedNs / 1_000_000
         return TracerInfo(completedTraces.size, traces.size - completedTraces.size, meanCompletedMs)
     }
@@ -241,7 +259,8 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
             return AppExitHistory()
         }
 
-        val exitReasons = applicationContext.historicalExitReasonsByProcessName("com.duckduckgo.mobile.android.vpn:vpn", 10)
+        val exitReasons =
+            applicationContext.historicalExitReasonsByProcessName("com.duckduckgo.mobile.android.vpn:vpn", 10)
         return AppExitHistory(exitReasons)
     }
 
@@ -265,7 +284,8 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
     private suspend fun retrieveRunningTimeInfo() =
         generateTimeRunningMessage(repository.getRunningTimeMillis({ repository.noStartDate() }).firstOrNull() ?: 0L)
 
-    private suspend fun retrieveAppTrackersBlockedInfo() = (repository.getVpnTrackers({ repository.noStartDate() }).firstOrNull() ?: emptyList()).size
+    private suspend fun retrieveAppTrackersBlockedInfo() =
+        (repository.getVpnTrackers({ repository.noStartDate() }).firstOrNull() ?: emptyList()).size
 
     private fun retrieveIpAddressesInfo(networkInfo: NetworkInfo): String {
         return if (networkInfo.networks.isEmpty()) {
@@ -357,7 +377,12 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
         for (networkInterface in NetworkInterface.getNetworkInterfaces()) {
             for (networkAddress in networkInterface.inetAddresses) {
                 if (!networkAddress.isLoopbackAddress) {
-                    networks.add(Network(address = networkAddress.hostAddress, type = addressType(address = networkAddress)))
+                    networks.add(
+                        Network(
+                            address = networkAddress.hostAddress,
+                            type = addressType(address = networkAddress)
+                        )
+                    )
                 }
             }
         }
@@ -455,6 +480,8 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
     }
 
     companion object {
+        private const val TIME_WINDOW_DURATION_MILLIS: Long = 10_000
+
         fun intent(context: Context): Intent {
             return Intent(context, VpnDiagnosticsActivity::class.java)
         }
