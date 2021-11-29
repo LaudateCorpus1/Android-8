@@ -54,9 +54,8 @@ class AppTPHealthMonitor @Inject constructor(
     @VpnCoroutineScope private val coroutineScope: CoroutineScope,
     private val healthMetricCounter: HealthMetricCounter,
     private val healthClassifier: HealthClassifier,
-    private val applicationContext: Context,
+    applicationContext: Context,
     private val tracerPacketBuilder: TracerPacketBuilder,
-    private val tracerPacketRegister: TracerPacketRegister,
     // private val vpnStateCollector: VpnStateCollector,
     private val vpnQueues: VpnQueues
 ) :
@@ -67,7 +66,7 @@ class AppTPHealthMonitor @Inject constructor(
 
         private const val NUMBER_OF_SAMPLES_TO_WAIT_FOR_ALERT = 4
         private const val MONITORING_FREQUENCY_MS: Long = 3_000 // todo: make longer; 30s ?
-        private const val TRACER_INJECTION_FREQUENCY_MS: Long = 15_000
+        private const val TRACER_INJECTION_FREQUENCY_MS: Long = 1_000
 
         const val BAD_HEALTH_NOTIFICATION_ID = 9890
     }
@@ -100,10 +99,10 @@ class AppTPHealthMonitor @Inject constructor(
         val timeWindow = now - SLIDING_WINDOW_DURATION_MS
 
         sampleTunReadQueueReadRate(timeWindow, tunReadAlerts)
-        sampleTracerPackets(timeWindow, tracerPacketsAlerts)
         sampleSocketReadExceptions(timeWindow, socketReadExceptionAlerts)
         sampleSocketWriteExceptions(timeWindow, socketWriteExceptionAlerts)
         sampleSocketConnectExceptions(timeWindow, socketConnectExceptionAlerts)
+        sampleTracerPackets(timeWindow, tracerPacketsAlerts)
 
         /*
          * temporary hack; remove once development done
@@ -121,8 +120,8 @@ class AppTPHealthMonitor @Inject constructor(
         }
     }
 
-    private fun sampleTracerPackets(timeWindow: Long, healthAlerts: HealthRule) {
-        val allTraces = tracerPacketRegister.getAllTraces(timeWindow)
+    private fun sampleTracerPackets(timeWindowMillis: Long, healthAlerts: HealthRule) {
+        val allTraces = healthMetricCounter.getAllPacketTraces(timeWindowMillis)
         val state = healthClassifier.determineHealthTracerPackets(allTraces)
         healthAlerts.updateAlert(state)
     }
@@ -204,8 +203,8 @@ class AppTPHealthMonitor @Inject constructor(
 
     private fun injectTracerPacket() {
         val packet = tracerPacketBuilder.build()
-        tracerPacketRegister.logEvent(TracerEvent(packet.tracerId, TracedState.CREATED))
-        tracerPacketRegister.logEvent(TracerEvent(packet.tracerId, TracedState.ADDED_TO_NETWORK_TO_DEVICE_QUEUE))
+        healthMetricCounter.logTracerPacketEvent(TracerEvent(packet.tracerId, TracedState.CREATED))
+        healthMetricCounter.logTracerPacketEvent(TracerEvent(packet.tracerId, TracedState.ADDED_TO_NETWORK_TO_DEVICE_QUEUE))
         vpnQueues.tcpDeviceToNetwork.offer(packet)
     }
 

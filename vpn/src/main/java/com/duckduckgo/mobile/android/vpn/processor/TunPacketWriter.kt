@@ -71,8 +71,7 @@ class TunPacketWriter(
                 val bytes = ByteArray(tracerIdLength)
                 bufferFromNetwork.get(bytes)
                 val tracerId = String(bytes)
-                tracerPacketRegister.logEvent(TracerEvent(tracerId, REMOVED_FROM_NETWORK_TO_DEVICE_QUEUE, timeReceived))
-                Timber.w("Found tracer packet %s on the way out to the TUN", tracerId)
+                tracerPacketRegister.logTracerPacketEvent(TracerEvent(tracerId, REMOVED_FROM_NETWORK_TO_DEVICE_QUEUE, timeReceived))
                 return
             }
 

@@ -74,10 +74,10 @@ class TracerPacketDebugReceiverRegister @Inject constructor(
     private fun execute(times: Int) {
         for (i in 0 until times) {
             val tracerPacket = buildTracerPacket()
-            tracerPacketRegister.logEvent(TracerEvent(tracerPacket.tracerId, TracedState.CREATED))
+            tracerPacketRegister.logTracerPacketEvent(TracerEvent(tracerPacket.tracerId, TracedState.CREATED))
 
             Timber.w("Injecting tracer packet %s", tracerPacket.tracerId)
-            tracerPacketRegister.logEvent(TracerEvent(tracerPacket.tracerId, TracedState.ADDED_TO_DEVICE_TO_NETWORK_QUEUE))
+            tracerPacketRegister.logTracerPacketEvent(TracerEvent(tracerPacket.tracerId, TracedState.ADDED_TO_DEVICE_TO_NETWORK_QUEUE))
             vpnQueues.tcpDeviceToNetwork.offer(tracerPacket)
         }
     }

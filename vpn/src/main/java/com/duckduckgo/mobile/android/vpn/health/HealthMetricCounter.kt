@@ -51,6 +51,13 @@ class HealthMetricCounter @Inject constructor(
     private val now: Long
         get() = System.currentTimeMillis()
 
+    fun clearAllMetrics() {
+        coroutineScope.launch(databaseDispatcher) {
+            db.clearAllTables()
+            tracerPacketRegister.deleteAll()
+        }
+    }
+
     fun onTunPacketReceived() {
         coroutineScope.launch(databaseDispatcher) {
             healthStatsDao.insert(TUN_READ())
@@ -105,11 +112,6 @@ class HealthMetricCounter @Inject constructor(
     fun getStat(type: SimpleEvent, recentTimeThresholdMillis: Long): Long {
         return healthStatsDao.eventCount(type.type, recentTimeThresholdMillis)
     }
-
-//    fun getStatHistory(type: SimpleEvent, recentTimeThreshold: Long? = null): List<Long> {
-//        val timeWindow = recentTimeThreshold ?: (now - WINDOW_DURATION_MS)
-//        return healthStatsDao.eventCount(type.type, timeWindow)
-//    }
 
     private fun StringBuilder.tunToQueueMetrics() {
         val recentTimeThreshold = now - WINDOW_DURATION_MS
@@ -175,6 +177,14 @@ class HealthMetricCounter @Inject constructor(
     private fun calculatePercentage(numerator: Long, denominator: Long): String {
         if (denominator == 0L) return "0%"
         return String.format("%s%%", numberFormat.format(numerator.toDouble() / denominator * 100))
+    }
+
+    fun getAllPacketTraces(timeWindowMillis: Long): List<TracerPacketRegister.TracerSummary> {
+        return tracerPacketRegister.getAllTraces(timeWindowMillis)
+    }
+
+    fun logTracerPacketEvent(tracerEvent: TracerEvent) {
+        tracerPacketRegister.logTracerPacketEvent(tracerEvent)
     }
 
     companion object {

@@ -22,7 +22,6 @@ import android.net.ConnectivityManager
 import android.net.NetworkCapabilities.*
 import android.os.Build
 import android.os.Bundle
-import android.os.Process
 import android.view.Menu
 import android.view.MenuItem
 import androidx.annotation.RequiresApi
@@ -35,16 +34,19 @@ import com.duckduckgo.app.global.extensions.historicalExitReasonsByProcessName
 import com.duckduckgo.mobile.android.ui.view.rightDrawable
 import com.duckduckgo.mobile.android.vpn.R
 import com.duckduckgo.mobile.android.vpn.databinding.ActivityVpnDiagnosticsBinding
-import com.duckduckgo.mobile.android.vpn.health.*
+import com.duckduckgo.mobile.android.vpn.health.AppTPHealthMonitor
 import com.duckduckgo.mobile.android.vpn.health.AppTPHealthMonitor.Companion.SLIDING_WINDOW_DURATION_MS
+import com.duckduckgo.mobile.android.vpn.health.HealthMetricCounter
 import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.ADD_TO_DEVICE_TO_NETWORK_QUEUE
 import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.REMOVE_FROM_DEVICE_TO_NETWORK_QUEUE
 import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.SOCKET_CHANNEL_CONNECT_EXCEPTION
 import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.SOCKET_CHANNEL_READ_EXCEPTION
 import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.SOCKET_CHANNEL_WRITE_EXCEPTION
 import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.TUN_READ
+import com.duckduckgo.mobile.android.vpn.health.TracerPacketBuilder
 import com.duckduckgo.mobile.android.vpn.health.TracerPacketRegister.TracerSummary.Completed
 import com.duckduckgo.mobile.android.vpn.model.TimePassed
+import com.duckduckgo.mobile.android.vpn.service.TrackerBlockingVpnService
 import com.duckduckgo.mobile.android.vpn.service.VpnQueues
 import com.duckduckgo.mobile.android.vpn.stats.AppTrackerBlockingStatsRepository
 import dagger.android.AndroidInjection
@@ -57,7 +59,6 @@ import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.NetworkInterface
 import java.text.NumberFormat
-import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope() {
@@ -74,9 +75,6 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
 
     @Inject
     lateinit var healthMetricCounter: HealthMetricCounter
-
-    @Inject
-    lateinit var tracerPacketRegister: TracerPacketRegister
 
     @Inject
     lateinit var vpnQueues: VpnQueues
@@ -104,7 +102,6 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
 
         lifecycleScope.launch {
             repeatOnLifecycle(Lifecycle.State.STARTED) {
-                Timber.i("appHealthMonitor: %s (pid=%d)", appTPHealthMonitor, Process.myPid())
                 appTPHealthMonitor.healthState.collect { healthState ->
                     Timber.i("Health is %s", healthState::class.java.simpleName)
                     val healthIndicator = when (healthState) {
@@ -121,8 +118,17 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
     }
 
     private fun configureEventHandlers() {
-        binding.clearTracersButton.setOnClickListener {
-            tracerPacketRegister.deleteAll()
+        binding.clearHealthMetricsButton.setOnClickListener {
+            healthMetricCounter.clearAllMetrics()
+            updateStatus()
+        }
+
+        binding.startVpnButton.setOnClickListener {
+            TrackerBlockingVpnService.startService(this)
+        }
+
+        binding.stopVpnButton.setOnClickListener {
+            TrackerBlockingVpnService.stopService(this)
         }
 
         binding.simulateGoodHealth.setOnClickListener {
@@ -159,7 +165,7 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
                 binding.networkAvailable.text =
                     getString(R.string.atp_NetworkAvailable, networkInfo.connectedToInternet.toString())
                 binding.runningTime.text = runningTimeFormatted
-                binding.appTrackersBlockedText.text = "App $appTrackersBlockedFormatted"
+                binding.appTrackersBlockedText.text = String.format("App %s", appTrackersBlockedFormatted)
                 binding.dnsServersText.text = getString(R.string.atp_DnsServers, dnsInfo)
                 binding.tracerCompletionTimeMean.text =
                     String.format("Average trace time: %s ms", numberFormatter.format(tracerInfo.meanSuccessfulTime))
@@ -243,14 +249,12 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
     }
 
     private fun retrieveTracerInfo(): TracerInfo {
-        val timeWindow = System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(SLIDING_WINDOW_DURATION_MS)
+        val timeWindow = System.currentTimeMillis() - SLIDING_WINDOW_DURATION_MS
 
-        val traces = tracerPacketRegister.getAllTraces(timeWindow)
+        val traces = healthMetricCounter.getAllPacketTraces(timeWindow)
         val completedTraces = traces.filterIsInstance<Completed>()
 
-        val meanCompletedNs =
-            if (completedTraces.isEmpty()) 0.0 else completedTraces.sumOf { it.timeToCompleteNanos }
-                .toDouble() / completedTraces.size
+        val meanCompletedNs = if (completedTraces.isEmpty()) 0.0 else completedTraces.sumOf { it.timeToCompleteNanos }.toDouble() / completedTraces.size
         val meanCompletedMs = meanCompletedNs / 1_000_000
         return TracerInfo(completedTraces.size, traces.size - completedTraces.size, meanCompletedMs)
     }

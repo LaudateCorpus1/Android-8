@@ -122,7 +122,7 @@ class TcpDeviceToNetwork(
 
     private fun processTracerPacker(packet: Packet) {
         val tracerId = packet.tracerId
-        tracerRegister.logEvent(TracerEvent(tracerId, TracedState.REMOVED_FROM_DEVICE_TO_NETWORK_QUEUE))
+        tracerRegister.logTracerPacketEvent(TracerEvent(tracerId, TracedState.REMOVED_FROM_DEVICE_TO_NETWORK_QUEUE))
 
         val idLength = tracerId.length
         val idBytes = tracerId.toByteArray()
@@ -132,7 +132,7 @@ class TcpDeviceToNetwork(
         byteBuffer.putInt(idLength)
         byteBuffer.put(idBytes)
 
-        tracerRegister.logEvent(TracerEvent(tracerId, TracedState.ADDED_TO_NETWORK_TO_DEVICE_QUEUE))
+        tracerRegister.logTracerPacketEvent(TracerEvent(tracerId, TracedState.ADDED_TO_NETWORK_TO_DEVICE_QUEUE))
         queues.networkToDevice.offer(byteBuffer)
     }
 

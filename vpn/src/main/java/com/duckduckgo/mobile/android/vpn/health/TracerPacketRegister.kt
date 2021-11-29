@@ -27,15 +27,17 @@ import javax.inject.Singleton
 @Singleton
 class TracerPacketRegister @Inject constructor() {
 
-    private val tracers: LruCache<String, Tracer> = LruCache(1000)
+    private val tracers: LruCache<String, Tracer> = LruCache(100)
 
-    fun logEvent(event: TracerEvent) {
+    fun logTracerPacketEvent(event: TracerEvent) {
         Timber.v("Registering %s for tracer %s", event.event, event.tracerId)
 
         val id = event.tracerId
         addEvent(id, event)
 
-        Timber.e("state for tracer packet %s\n\n%s", id, getTrace(id))
+        if (event.event == TracedState.REMOVED_FROM_NETWORK_TO_DEVICE_QUEUE) {
+            Timber.e("state for tracer packet %s\n\n%s", id, getTrace(id))
+        }
     }
 
     @Synchronized
@@ -52,19 +54,18 @@ class TracerPacketRegister @Inject constructor() {
         val existing = tracers[id]
         if (existing != null) return existing
 
-        Timber.i("no existing list exists for tracer %s, creating new one", id)
+        val tracer = Tracer(tracerId = id, creationTimestampMillis = System.currentTimeMillis(), events = emptyList())
 
-        val tracer = Tracer(tracerId = id, timestampNanos = System.nanoTime(), events = emptyList())
+        Timber.d("Tracer %s created", tracer.tracerId)
+
         tracers.put(id, tracer)
         return tracer
     }
 
-    fun getAllTraces(timeWindowNanos: Long): List<TracerSummary> {
+    fun getAllTraces(timeWindowMillis: Long): List<TracerSummary> {
         return tracers.snapshot()
-            .map {
-                categorize(it.value, it.key)
-            }
-            .filter { it.timestampNanos >= timeWindowNanos }
+            .map { categorize(it.value, it.key) }
+            .filter { it.creationTimestampMillis >= timeWindowMillis }
     }
 
     fun getTrace(tracerId: String): TracerSummary {
@@ -73,7 +74,7 @@ class TracerPacketRegister @Inject constructor() {
     }
 
     private fun categorize(tracer: Tracer, tracerId: String): TracerSummary {
-        val startTime = tracer.timestampNanos
+        val startTime = tracer.creationTimestampMillis
         val firstEvent = tracer.events.firstOrNull() ?: return Invalid(
             tracerId,
             startTime,
@@ -99,7 +100,7 @@ class TracerPacketRegister @Inject constructor() {
             )
         }
 
-        val totalTime = tracer.events.last().timestampNanos - startTime
+        val totalTime = tracer.events.last().timestampNanos - firstEvent.timestampNanos
         return Completed(tracerId, startTime, totalTime, tracer.events)
     }
 
@@ -107,13 +108,13 @@ class TracerPacketRegister @Inject constructor() {
         tracers.evictAll()
     }
 
-    sealed class TracerSummary(open val tracerId: String, open val timestampNanos: Long) {
+    sealed class TracerSummary(open val tracerId: String, open val creationTimestampMillis: Long) {
         data class Completed(
             override val tracerId: String,
-            override val timestampNanos: Long,
+            override val creationTimestampMillis: Long,
             val timeToCompleteNanos: Long,
             val events: List<TracerEvent>
-        ) : TracerSummary(tracerId, timestampNanos) {
+        ) : TracerSummary(tracerId, creationTimestampMillis) {
             override fun toString(): String {
 
                 return StringBuilder(
@@ -125,22 +126,21 @@ class TracerPacketRegister @Inject constructor() {
                         formatNanos(timeToCompleteNanos)
                     )
                 ).also { sb ->
-                    sb.append(String.format("---> CREATED at %d", timestampNanos))
+                    sb.append(String.format("---> CREATED at %d", creationTimestampMillis))
 
                     events
                         .filter { it.event != TracedState.CREATED }
                         .forEach {
-                            val durationFromCreation = it.timestampNanos - timestampNanos
+                            val durationFromCreation = it.timestampNanos - events.first().timestampNanos
 
                             sb.append("\n")
 
                             sb.append(
                                 String.format(
-                                    "---> %s happened %s (%s) after it was first created (absolute time=%d)",
+                                    "---> %s happened %s (%s) after it was first created",
                                     it.event,
                                     formatNanosAsMillis(durationFromCreation),
-                                    formatNanos(durationFromCreation),
-                                    it.timestampNanos
+                                    formatNanos(durationFromCreation)
                                 )
                             )
                         }
@@ -150,8 +150,8 @@ class TracerPacketRegister @Inject constructor() {
             }
         }
 
-        data class Invalid(override val tracerId: String, override val timestampNanos: Long, val reason: String) :
-            TracerSummary(tracerId, timestampNanos) {
+        data class Invalid(override val tracerId: String, override val creationTimestampMillis: Long, val reason: String) :
+            TracerSummary(tracerId, creationTimestampMillis) {
 
             override fun toString(): String {
                 return String.format("TracerSummary for %s. Invalid: %s", tracerId, reason)

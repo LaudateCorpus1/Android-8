@@ -50,18 +50,27 @@ class HealthClassifier @Inject constructor() {
     }
 
     fun determineHealthTracerPackets(allTraces: List<TracerPacketRegister.TracerSummary>): HealthState {
-        if (allTraces.size < 10) return Initializing
+        if (allTraces.size < 10) {
+            Timber.v("Tracer packet health: Initializing, as only %d tracers encountered", allTraces.size)
+            return Initializing
+        }
 
         val successfulTraces = allTraces
             .filterIsInstance<TracerPacketRegister.TracerSummary.Completed>()
             .filter { it.timeToCompleteNanos <= SLOWEST_ACCEPTABLE_TRACER_DURATION_NANOS }
 
         val successRate = percentage(successfulTraces.size.toLong(), allTraces.size.toLong())
-        Timber.v("Tracer packet health:\nSuccessful: %d Failed: %d Total: %d - Success rate: %.2f %%", successfulTraces.size, allTraces.size - successfulTraces.size, allTraces.size, successRate)
+        val goodHealth = successRate >= 95
+        Timber.v(
+            "Tracer packet health: %s\nSuccessful: %d Failed: %d Total: %d - Success rate: %.2f %%",
+            if (goodHealth) "good" else "bad",
+            successfulTraces.size,
+            allTraces.size - successfulTraces.size,
+            allTraces.size,
+            successRate
+        )
 
-        if (successRate < 95) return BadHealth
-
-        return GoodHealth
+        return if (goodHealth) GoodHealth else BadHealth
     }
 
     companion object {
