@@ -46,7 +46,6 @@ class TracerPacketRegister @Inject constructor() {
             it.add(event)
         }
         tracers.put(id, tracer.copy(events = events))
-        // tracers[id] = events
     }
 
     private fun getTracer(id: String): Tracer {
@@ -75,7 +74,11 @@ class TracerPacketRegister @Inject constructor() {
 
     private fun categorize(tracer: Tracer, tracerId: String): TracerSummary {
         val startTime = tracer.timestampNanos
-        val firstEvent = tracer.events.firstOrNull() ?: return Invalid(tracerId, startTime, "No CREATED timestamp available; invalid")
+        val firstEvent = tracer.events.firstOrNull() ?: return Invalid(
+            tracerId,
+            startTime,
+            "No CREATED timestamp available; invalid"
+        )
 
         if (firstEvent.event != TracedState.CREATED) {
             return Invalid(
@@ -85,7 +88,16 @@ class TracerPacketRegister @Inject constructor() {
             )
         }
 
-        // todo do we need to validate if it successfully reached the "end" ?
+        if (tracer.events.last().event != TracedState.REMOVED_FROM_NETWORK_TO_DEVICE_QUEUE) {
+            return Invalid(
+                tracerId,
+                startTime,
+                String.format(
+                    "The tracer did not reach its final destination. Last state reached: %s",
+                    tracer.events.last().event
+                )
+            )
+        }
 
         val totalTime = tracer.events.last().timestampNanos - startTime
         return Completed(tracerId, startTime, totalTime, tracer.events)
@@ -138,10 +150,13 @@ class TracerPacketRegister @Inject constructor() {
             }
         }
 
-        data class Invalid(override val tracerId: String, override val timestampNanos: Long, val reason: String) : TracerSummary(tracerId, timestampNanos) {
+        data class Invalid(override val tracerId: String, override val timestampNanos: Long, val reason: String) :
+            TracerSummary(tracerId, timestampNanos) {
+
             override fun toString(): String {
                 return String.format("TracerSummary for %s. Invalid: %s", tracerId, reason)
             }
+
         }
     }
 

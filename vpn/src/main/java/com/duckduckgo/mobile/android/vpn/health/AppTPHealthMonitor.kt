@@ -63,10 +63,11 @@ class AppTPHealthMonitor @Inject constructor(
     VpnServiceCallbacks {
 
     companion object {
-        private const val NUMBER_OF_SAMPLES_TO_WAIT_FOR_ALERT = 5
-        private const val SLIDING_WINDOW_DURATION_MS: Long = 10_000
-        private const val MONITORING_INTERVAL_MS: Long = 1_000 // todo: make longer; 10s ?
-        private const val TRACER_INJECTION_FREQUENCY_MS: Long = 5_000
+        const val SLIDING_WINDOW_DURATION_MS: Long = 30_000
+
+        private const val NUMBER_OF_SAMPLES_TO_WAIT_FOR_ALERT = 4
+        private const val MONITORING_FREQUENCY_MS: Long = 3_000 // todo: make longer; 30s ?
+        private const val TRACER_INJECTION_FREQUENCY_MS: Long = 15_000
 
         const val BAD_HEALTH_NOTIFICATION_ID = 9890
     }
@@ -84,28 +85,11 @@ class AppTPHealthMonitor @Inject constructor(
 
     private val healthRules = mutableListOf<HealthRule>()
 
-    private val tunReadAlerts = object : HealthRule(5) {}.also { healthRules.add(it) }
-    private val socketReadExceptionAlerts = object : HealthRule(5) {}.also { healthRules.add(it) }
-    private val socketWriteExceptionAlerts = object : HealthRule(5) {}.also { healthRules.add(it) }
-    private val socketConnectExceptionAlerts = object : HealthRule(5) {}.also { healthRules.add(it) }
-    private val tracerPacketsAlerts = object : HealthRule(5) {}.also { healthRules.add(it) }
-
-    abstract class HealthRule(open var samplesToWaitBeforeAlerting: Int) {
-        var badHealthSampleCount: Int = 0
-
-        fun recordBadHealthSample() {
-            badHealthSampleCount++
-        }
-
-        fun resetBadHealthSampleCount() {
-            badHealthSampleCount = 0
-        }
-
-        fun shouldAlertBadHealth(): Boolean {
-            if (badHealthSampleCount == 0) return false
-            return badHealthSampleCount >= samplesToWaitBeforeAlerting
-        }
-    }
+    private val tunReadAlerts = object : HealthRule() {}.also { healthRules.add(it) }
+    private val socketReadExceptionAlerts = object : HealthRule() {}.also { healthRules.add(it) }
+    private val socketWriteExceptionAlerts = object : HealthRule() {}.also { healthRules.add(it) }
+    private val socketConnectExceptionAlerts = object : HealthRule() {}.also { healthRules.add(it) }
+    private val tracerPacketsAlerts = object : HealthRule(samplesToWaitBeforeAlerting = 2) {}.also { healthRules.add(it) }
 
     private val badHealthNotificationManager = HealthNotificationManager(applicationContext)
 
@@ -126,8 +110,6 @@ class AppTPHealthMonitor @Inject constructor(
          */
         temporarySimulatedHealthCheck()
 
-        val overallState = determineOverallState()
-
         if (isInProlongedBadHealth()) {
             Timber.i("App health check caught some problem(s)")
             _healthState.emit(BadHealth)
@@ -139,20 +121,9 @@ class AppTPHealthMonitor @Inject constructor(
         }
     }
 
-    private fun determineOverallState(): HealthState {
-        return if (1 == 3) {
-            Initializing
-        } else if (isInProlongedBadHealth()) {
-            BadHealth
-        } else {
-            GoodHealth
-        }
-    }
-
     private fun sampleTracerPackets(timeWindow: Long, healthAlerts: HealthRule) {
         val allTraces = tracerPacketRegister.getAllTraces(timeWindow)
-        val successfulTraces = allTraces.count { it is TracerPacketRegister.TracerSummary.Completed }
-        val state = healthClassifier.determineHealthTracerPackets(allTraces.size, successfulTraces)
+        val state = healthClassifier.determineHealthTracerPackets(allTraces)
         healthAlerts.updateAlert(state)
     }
 
@@ -219,7 +190,7 @@ class AppTPHealthMonitor @Inject constructor(
         monitoringJob += coroutineScope.launch {
             while (isActive) {
                 checkCurrentHealth()
-                delay(MONITORING_INTERVAL_MS)
+                delay(MONITORING_FREQUENCY_MS)
             }
         }
 
@@ -265,6 +236,23 @@ class AppTPHealthMonitor @Inject constructor(
 
     fun toggleNotifications(shouldShowNotifications: Boolean) {
         badHealthNotificationManager.shouldShowNotifications = shouldShowNotifications
+    }
+
+    private abstract class HealthRule(open var samplesToWaitBeforeAlerting: Int = NUMBER_OF_SAMPLES_TO_WAIT_FOR_ALERT) {
+        var badHealthSampleCount: Int = 0
+
+        fun recordBadHealthSample() {
+            badHealthSampleCount++
+        }
+
+        fun resetBadHealthSampleCount() {
+            badHealthSampleCount = 0
+        }
+
+        fun shouldAlertBadHealth(): Boolean {
+            if (badHealthSampleCount == 0) return false
+            return badHealthSampleCount >= samplesToWaitBeforeAlerting
+        }
     }
 
 }

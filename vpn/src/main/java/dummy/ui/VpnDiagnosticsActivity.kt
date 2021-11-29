@@ -36,6 +36,7 @@ import com.duckduckgo.mobile.android.ui.view.rightDrawable
 import com.duckduckgo.mobile.android.vpn.R
 import com.duckduckgo.mobile.android.vpn.databinding.ActivityVpnDiagnosticsBinding
 import com.duckduckgo.mobile.android.vpn.health.*
+import com.duckduckgo.mobile.android.vpn.health.AppTPHealthMonitor.Companion.SLIDING_WINDOW_DURATION_MS
 import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.ADD_TO_DEVICE_TO_NETWORK_QUEUE
 import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.REMOVE_FROM_DEVICE_TO_NETWORK_QUEUE
 import com.duckduckgo.mobile.android.vpn.health.SimpleEvent.Companion.SOCKET_CHANNEL_CONNECT_EXCEPTION
@@ -221,7 +222,7 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
     }
 
     private fun retrieveHealthMetricsInfo(): HealthMetricsInfo {
-        val timeWindow = System.currentTimeMillis() - TIME_WINDOW_DURATION_MILLIS
+        val timeWindow = System.currentTimeMillis() - SLIDING_WINDOW_DURATION_MS
 
         val tunPacketReceived = healthMetricCounter.getStat(TUN_READ(), timeWindow)
         val removeFromDeviceToNetworkQueue =
@@ -242,7 +243,7 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
     }
 
     private fun retrieveTracerInfo(): TracerInfo {
-        val timeWindow = System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(TIME_WINDOW_DURATION_MILLIS)
+        val timeWindow = System.nanoTime() - TimeUnit.MILLISECONDS.toNanos(SLIDING_WINDOW_DURATION_MS)
 
         val traces = tracerPacketRegister.getAllTraces(timeWindow)
         val completedTraces = traces.filterIsInstance<Completed>()
@@ -480,7 +481,6 @@ class VpnDiagnosticsActivity : DuckDuckGoActivity(), CoroutineScope by MainScope
     }
 
     companion object {
-        private const val TIME_WINDOW_DURATION_MILLIS: Long = 10_000
 
         fun intent(context: Context): Intent {
             return Intent(context, VpnDiagnosticsActivity::class.java)

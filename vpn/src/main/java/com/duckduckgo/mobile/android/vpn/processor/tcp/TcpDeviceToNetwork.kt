@@ -95,7 +95,8 @@ class TcpDeviceToNetwork(
         packet.backingBuffer = null
 
         val responseBuffer = ByteBufferPool.acquire()
-        val connectionParams = TcpConnectionParams(destinationAddress.hostAddress, destinationPort, sourcePort, packet, responseBuffer)
+        val connectionParams =
+            TcpConnectionParams(destinationAddress.hostAddress, destinationPort, sourcePort, packet, responseBuffer)
         val connectionKey = connectionParams.key()
 
         val totalPacketLength = payloadBuffer.limit()
@@ -107,7 +108,15 @@ class TcpDeviceToNetwork(
         if (tcb == null) {
             processPacketTcbNotInitialized(connectionKey, packet, totalPacketLength, connectionParams)
         } else {
-            processPacketTcbExists(connectionKey, tcb, packet, totalPacketLength, connectionParams, responseBuffer, payloadBuffer)
+            processPacketTcbExists(
+                connectionKey,
+                tcb,
+                packet,
+                totalPacketLength,
+                connectionParams,
+                responseBuffer,
+                payloadBuffer
+            )
         }
     }
 
@@ -127,7 +136,12 @@ class TcpDeviceToNetwork(
         queues.networkToDevice.offer(byteBuffer)
     }
 
-    private fun processPacketTcbNotInitialized(connectionKey: String, packet: Packet, totalPacketLength: Int, connectionParams: TcpConnectionParams) {
+    private fun processPacketTcbNotInitialized(
+        connectionKey: String,
+        packet: Packet,
+        totalPacketLength: Int,
+        connectionParams: TcpConnectionParams
+    ) {
         Timber.v(
             "New packet. %s. TCB not initialized. %s. Packet length: %d.  Data length: %d",
             connectionKey,
@@ -145,7 +159,11 @@ class TcpDeviceToNetwork(
                 SendAck -> {
                     synchronized(connectionParams.responseBuffer) {
                         connectionParams.packet.updateTcpBuffer(
-                            connectionParams.responseBuffer, ACK.toByte(), 0, connectionParams.packet.tcpHeader.sequenceNumber + 1, 0
+                            connectionParams.responseBuffer,
+                            ACK.toByte(),
+                            0,
+                            connectionParams.packet.tcpHeader.sequenceNumber + 1,
+                            0
                         )
                         queues.networkToDevice.offer(connectionParams.responseBuffer)
                     }
@@ -153,12 +171,20 @@ class TcpDeviceToNetwork(
                 SendReset -> {
                     synchronized(connectionParams.responseBuffer) {
                         connectionParams.packet.updateTcpBuffer(
-                            connectionParams.responseBuffer, RST.toByte(), 0, connectionParams.packet.tcpHeader.sequenceNumber + 1, 0
+                            connectionParams.responseBuffer,
+                            RST.toByte(),
+                            0,
+                            connectionParams.packet.tcpHeader.sequenceNumber + 1,
+                            0
                         )
                         queues.networkToDevice.offer(connectionParams.responseBuffer)
                     }
                 }
-                else -> Timber.e("No connection open and won't open one to %s. Dropping packet. (action=%s)", connectionKey, it)
+                else -> Timber.e(
+                    "No connection open and won't open one to %s. Dropping packet. (action=%s)",
+                    connectionKey,
+                    it
+                )
             }
         }
 
@@ -189,14 +215,24 @@ class TcpDeviceToNetwork(
         }
 
         val action =
-            TcpStateFlow.newPacket(connectionKey, tcb.tcbState, packet.asPacketType(tcb.finSequenceNumberToClient), tcb.sequenceNumberToClientInitial)
+            TcpStateFlow.newPacket(
+                connectionKey,
+                tcb.tcbState,
+                packet.asPacketType(tcb.finSequenceNumberToClient),
+                tcb.sequenceNumberToClientInitial
+            )
         Timber.v("Action: %s for %s", action.events, tcb.ipAndPort)
 
         action.events.forEach {
             when (it) {
                 is MoveState -> tcb.updateState(it)
                 ProcessPacket -> processPacket(tcb, packet, payloadBuffer, connectionParams)
-                SendFin -> tcb.sendFinToClient(queues, packet, packet.tcpPayloadSize(true), triggeredByServerEndOfStream = false)
+                SendFin -> tcb.sendFinToClient(
+                    queues,
+                    packet,
+                    packet.tcpPayloadSize(true),
+                    triggeredByServerEndOfStream = false
+                )
                 SendFinWithData -> tcb.sendFinToClient(queues, packet, 0, triggeredByServerEndOfStream = false)
                 CloseConnection -> closeConnection(tcb, responseBuffer)
                 SendReset -> tcbCloser.sendResetPacket(tcb, queues, packet, packet.tcpPayloadSize(true))
@@ -248,15 +284,31 @@ class TcpDeviceToNetwork(
         }
     }
 
-    private fun isARetryForRecentlyBlockedTracker(requestingApp: OriginatingApp, hostName: String?, payloadSize: Int): Boolean {
+    private fun isARetryForRecentlyBlockedTracker(
+        requestingApp: OriginatingApp,
+        hostName: String?,
+        payloadSize: Int
+    ): Boolean {
         if (hostName == null) return false
-        val recentTrackerEvent = recentAppTrackerCache.getRecentTrackingAttempt(requestingApp.packageId, hostName, payloadSize) ?: return false
+        val recentTrackerEvent =
+            recentAppTrackerCache.getRecentTrackingAttempt(requestingApp.packageId, hostName, payloadSize)
+                ?: return false
         val timeSinceTrackerRequested = System.currentTimeMillis() - recentTrackerEvent.timestamp
-        Timber.v("Tracker %s was last sent by %s %dms ago", hostName, requestingApp.packageId, timeSinceTrackerRequested)
+        Timber.v(
+            "Tracker %s was last sent by %s %dms ago",
+            hostName,
+            requestingApp.packageId,
+            timeSinceTrackerRequested
+        )
         return true
     }
 
-    private fun processPacket(tcb: TCB, packet: Packet, payloadBuffer: ByteBuffer, connectionParams: TcpConnectionParams) {
+    private fun processPacket(
+        tcb: TCB,
+        packet: Packet,
+        payloadBuffer: ByteBuffer,
+        connectionParams: TcpConnectionParams
+    ) {
         synchronized(tcb) {
             val payloadSize = payloadBuffer.limit() - payloadBuffer.position()
             if (payloadSize == 0) {
@@ -309,12 +361,26 @@ class TcpDeviceToNetwork(
                 selector.wakeup()
                 tcb.channel.register(selector, OP_WRITE, tcb)
 
-                val writeData = PendingWriteData(payloadBuffer, tcb.channel, payloadSize, tcb, connectionParams, ackNumber, seqNumber)
+                val writeData = PendingWriteData(
+                    payloadBuffer,
+                    tcb.channel,
+                    payloadSize,
+                    tcb,
+                    connectionParams,
+                    ackNumber,
+                    seqNumber
+                )
                 socketWriter.addToWriteQueue(writeData, false)
             } catch (e: IOException) {
                 val bytesUnwritten = payloadBuffer.remaining()
                 val bytesWritten = payloadSize - bytesUnwritten
-                Timber.w(e, "Network write error for %s. Wrote %d; %d unwritten", tcb.ipAndPort, bytesWritten, bytesUnwritten)
+                Timber.w(
+                    e,
+                    "Network write error for %s. Wrote %d; %d unwritten",
+                    tcb.ipAndPort,
+                    bytesWritten,
+                    bytesUnwritten
+                )
                 tcbCloser.sendResetPacket(tcb, queues, packet, bytesWritten)
                 return
             }
@@ -332,7 +398,12 @@ class TcpDeviceToNetwork(
             tcb.enterGhostingMode()
             processPacketInGhostingMode(tcb)
         } else {
-            Timber.i("Blocking tracker request. [%s] ---> [%s] %s", tcb.requestingAppPackage, tcb.trackerHostName, tcb.ipAndPort)
+            Timber.i(
+                "Blocking tracker request. [%s] ---> [%s] %s",
+                tcb.requestingAppPackage,
+                tcb.trackerHostName,
+                tcb.ipAndPort
+            )
 
             recentAppTrackerCache.addTrackerForApp(requestingApp.packageId, tcb.hostName, tcb.ipAndPort, payloadSize)
             tcbCloser.sendResetPacket(tcb, queues, packet, payloadSize)

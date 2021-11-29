@@ -19,6 +19,7 @@ package com.duckduckgo.mobile.android.vpn.health
 import com.duckduckgo.mobile.android.vpn.health.AppTPHealthMonitor.HealthState
 import com.duckduckgo.mobile.android.vpn.health.AppTPHealthMonitor.HealthState.*
 import timber.log.Timber
+import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
 class HealthClassifier @Inject constructor() {
@@ -43,12 +44,29 @@ class HealthClassifier @Inject constructor() {
         return if (connectExceptions >= 20) BadHealth else GoodHealth
     }
 
-    fun determineHealthTracerPackets(totalTraces: Int, successfulTraces: Int): HealthState {
-        if (totalTraces < 10) return Initializing
-        return if (percentage(successfulTraces.toLong(), totalTraces.toLong()) >= 95) GoodHealth else BadHealth
+    fun determineHealthSocketChannelTimeoutExceptions(connectExceptions: Long): HealthState {
+        Timber.v("There were %d socket timeout exceptions recently.", connectExceptions)
+        return if (connectExceptions >= 20) BadHealth else GoodHealth
+    }
+
+    fun determineHealthTracerPackets(allTraces: List<TracerPacketRegister.TracerSummary>): HealthState {
+        if (allTraces.size < 10) return Initializing
+
+        val successfulTraces = allTraces
+            .filterIsInstance<TracerPacketRegister.TracerSummary.Completed>()
+            .filter { it.timeToCompleteNanos <= SLOWEST_ACCEPTABLE_TRACER_DURATION_NANOS }
+
+        val successRate = percentage(successfulTraces.size.toLong(), allTraces.size.toLong())
+        Timber.v("Tracer packet health:\nSuccessful: %d Failed: %d Total: %d - Success rate: %.2f %%", successfulTraces.size, allTraces.size - successfulTraces.size, allTraces.size, successRate)
+
+        if (successRate < 95) return BadHealth
+
+        return GoodHealth
     }
 
     companion object {
+        private val SLOWEST_ACCEPTABLE_TRACER_DURATION_NANOS = TimeUnit.SECONDS.toNanos(1)
+
         fun percentage(numerator: Long, denominator: Long): Double {
             if (denominator == 0L) return 0.0
             return numerator.toDouble() / denominator * 100
